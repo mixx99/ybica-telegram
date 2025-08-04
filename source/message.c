@@ -29,7 +29,7 @@ void send_private_message(User *receiver, Message *message) {
     return;
   }
 
-  unsigned char message_data[MESSAGE_SERIALIZED_SIZE], *ptr;
+  unsigned char message_data[sizeof(*message)], *ptr;
   ptr = serialize_message(message, message_data);
   send(sockfd, message_data, ptr - message_data, 0);
   close(sockfd);
@@ -55,7 +55,7 @@ void send_message(Message *message) {
   sockaddr.sin_port = htons(PORT);
   sockaddr.sin_addr.s_addr = inet_addr("255.255.255.255");
 
-  unsigned char message_data[MESSAGE_SERIALIZED_SIZE], *ptr;
+  unsigned char message_data[sizeof(*message)], *ptr;
   ptr = serialize_message(message, message_data);
   int sent = sendto(sockfd, message_data, ptr - message_data, 0,
                     (struct sockaddr *)&sockaddr, sizeof(sockaddr));
