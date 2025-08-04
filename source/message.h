@@ -12,7 +12,13 @@
   sizeof(uint32_t) * 4 + USER_NAME_SIZE + MESSAGE_TEXT_LENGTH
 #define PORT 5555
 
-enum MESSAGE_TYPE { MESSAGE_FILE, MESSAGE_TEXT };
+enum MESSAGE_TYPE {
+  MESSAGE_FILE,
+  MESSAGE_TEXT,
+  MESSAGE_SYSTEM_JOIN,
+  MESSAGE_SYSTEM_EXIT,
+  MESSAGE_SYSTEM_ABOUT_ME
+};
 
 typedef struct {
   uint32_t sender_uuid;
@@ -24,5 +30,6 @@ typedef struct {
 } Message;
 
 void send_message(Message *message);
+void send_private_message(User *receiver, Message *message);
 
 #endif // MESSAGE_H
