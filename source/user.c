@@ -3,14 +3,12 @@
 #include "message.h"
 #include "serialization.h"
 
-#include <memory.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <pthread.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -24,22 +22,25 @@ static User active_users[ACTIVE_USERS_SIZE] = {0};
 
 static int tcp_listen_ready = 0;
 static int udp_listen_ready = 0;
-pthread_mutex_t listen_ready_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t listen_ready_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static int socket_tcp;
-static int socket_udp;
-static int socket_localip;
+static int socket_tcp = 0;
+static int socket_udp = 0;
+static int socket_localip = 0;
 
-static inline void get_local_ip(char *buffer, size_t buffer_size);
 static inline void add_active_user(Message *message);
 static inline void remove_active_user(Message *message);
 static inline void show_active_users();
 static inline User *find_user(uint32_t uuid);
 static inline User *find_user_by_name(char *name);
+static inline void get_local_ip(char *buffer, size_t buffer_size);
 static inline void send_info_join_to_everyone(User *user);
 static inline void send_info_about_me_to_user(uint32_t uuid, User *me);
 static inline void parse_user_input(User *user, Message *message, char *buffer,
                                     size_t buffer_size);
+static inline void parse_message(Message *message, User *user);
+static inline void *listen_other_users_tcp(void *args);
+static inline void *listen_other_users_udp(void *args);
 
 // Adds user to active_users.
 static inline void add_active_user(Message *message) {
@@ -148,8 +149,8 @@ static inline void send_info_join_to_everyone(User *user) {
 
 // Gets and deserializes message.
 static inline int get_message(Message *message, int sockfd) {
-  unsigned char message_data[MESSAGE_SERIALIZED_SIZE];
-  int status = recv(sockfd, message_data, MESSAGE_SERIALIZED_SIZE, 0);
+  unsigned char message_data[sizeof(*message)];
+  int status = recv(sockfd, message_data, sizeof(message_data), 0);
   if (status < 0) {
     print_error("Recv error");
     return -1;

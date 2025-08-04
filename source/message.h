@@ -3,13 +3,9 @@
 
 #include "user.h"
 
-// std
 #include <stdint.h>
-#include <time.h>
 
 #define MESSAGE_TEXT_LENGTH 1024
-#define MESSAGE_SERIALIZED_SIZE                                                \
-  sizeof(uint32_t) * 4 + USER_NAME_SIZE + MESSAGE_TEXT_LENGTH
 #define PORT 5555
 
 enum MESSAGE_TYPE {
