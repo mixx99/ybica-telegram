@@ -10,6 +10,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// Gets and deserializes message.
+int get_message(Message *message, int sockfd) {
+  unsigned char message_data[sizeof(*message)];
+  int status = recv(sockfd, message_data, sizeof(message_data), 0);
+  if (status < 0) {
+    print_error("Recv error");
+    return -1;
+  }
+  deserialize_message(message, message_data);
+  return 0;
+}
+
 // Sends private TCP message to receiver using his local ip and port.
 void send_private_message(User *receiver, Message *message) {
   int sockfd;

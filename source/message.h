@@ -27,5 +27,6 @@ typedef struct {
 
 void send_message(Message *message);
 void send_private_message(User *receiver, Message *message);
+int get_message(Message *message, int sockfd);
 
 #endif // MESSAGE_H
