@@ -1,7 +1,6 @@
 #include "user.h"
 #include "log.h"
 #include "message.h"
-#include "serialization.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -145,18 +144,6 @@ static inline void send_info_join_to_everyone(User *user) {
   message.time = time(NULL);
   message.type = MESSAGE_SYSTEM_JOIN;
   send_message(&message);
-}
-
-// Gets and deserializes message.
-static inline int get_message(Message *message, int sockfd) {
-  unsigned char message_data[sizeof(*message)];
-  int status = recv(sockfd, message_data, sizeof(message_data), 0);
-  if (status < 0) {
-    print_error("Recv error");
-    return -1;
-  }
-  deserialize_message(message, message_data);
-  return 0;
 }
 
 // Sends info about user to receiver using private_message. Message.text =
