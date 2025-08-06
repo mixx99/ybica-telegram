@@ -15,9 +15,11 @@
 #include <sys/types.h>
 
 #define ACTIVE_USERS_SIZE 256
+#define TRUSTED_USERS_SIZE ACTIVE_USERS_SIZE
 
 static volatile int should_run = 1;
 static User active_users[ACTIVE_USERS_SIZE] = {0};
+static User trusted_users[TRUSTED_USERS_SIZE] = {0};
 
 static int tcp_listen_ready = 0;
 static int udp_listen_ready = 0;
@@ -28,18 +30,25 @@ static int socket_udp = 0;
 static int socket_localip = 0;
 
 static inline void add_active_user(Message *message);
+static inline void add_trusted_user(char *name);
 static inline void remove_active_user(Message *message);
+static inline void remove_trusted_user(char *name);
 static inline void show_active_users();
+static inline void show_trusted_users();
 static inline User *find_user(uint32_t uuid);
 static inline User *find_user_by_name(char *name);
+static inline User *find_trusted_user(char *name);
+static inline User *find_trusted_user_by_uuid(uint32_t uuid);
 static inline void get_local_ip(char *buffer, size_t buffer_size);
 static inline void send_info_join_to_everyone(User *user);
 static inline void send_info_about_me_to_user(uint32_t uuid, User *me);
 static inline void parse_user_input(User *user, Message *message, char *buffer,
                                     size_t buffer_size);
-static inline void parse_message(Message *message, User *user);
+static inline void parse_message(Message *message, User *user, int is_private);
+static inline void parse_file_message(Message *message, User *me);
 static inline void *listen_other_users_tcp(void *args);
 static inline void *listen_other_users_udp(void *args);
+static inline void print_help();
 
 // Adds user to active_users.
 static inline void add_active_user(Message *message) {
@@ -63,7 +72,28 @@ static inline void add_active_user(Message *message) {
       return;
     }
   }
-  print_error("Failed to add a user");
+  print_error("Failed to add a user %s.", message->sender_name);
+}
+
+static inline void add_trusted_user(char *name) {
+  User *user = find_user_by_name(name);
+  if (user == NULL) {
+    print_error("Failed to add user %s to trusted users.", name);
+    return;
+  }
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i)
+    if (trusted_users[i].uuid == user->uuid) {
+      print_message("User %s already trusted", name);
+      return;
+    }
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i) {
+    if (trusted_users[i].uuid == 0) {
+      trusted_users[i] = *user;
+      print_message("Now %s is trusted user", name);
+      return;
+    }
+  }
+  print_error("Failed to add user %s to trusted users.", name);
 }
 
 // Removes user from active_users.
@@ -74,7 +104,22 @@ static inline void remove_active_user(Message *message) {
       return;
     }
   }
-  print_error("Failed to remove user");
+  print_error("Failed to remove user %s.", message->sender_name);
+}
+
+static inline void remove_trusted_user(char *name) {
+  User *user = find_user_by_name(name);
+  if (user == NULL) {
+    print_error("Failed to remove trusted user %s.", name);
+    return;
+  }
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i) {
+    if (trusted_users[i].uuid == user->uuid) {
+      memset(&trusted_users[i], 0, sizeof(trusted_users[i]));
+      return;
+    }
+  }
+  print_error("Failed to remove trusted user %s.", name);
 }
 
 // Finds user in active_users.
@@ -94,12 +139,34 @@ static inline User *find_user_by_name(char *name) {
   return NULL;
 }
 
+static inline User *find_trusted_user_by_uuid(uint32_t uuid) {
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i)
+    if (trusted_users[i].uuid == uuid)
+      return &trusted_users[i];
+  return NULL;
+}
+
+static inline User *find_trusted_user(char *name) {
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i)
+    if (strncmp(trusted_users[i].name, name, USER_NAME_SIZE) == 0)
+      return &trusted_users[i];
+  return NULL;
+}
+
 // Prints all active_users.
 static inline void show_active_users() {
   print_message("Current active users:");
   for (int i = 0; i < ACTIVE_USERS_SIZE; ++i) {
     if (active_users[i].uuid != 0)
       print_message("%d.%s", i + 1, active_users[i].name);
+  }
+}
+
+static inline void show_trusted_users() {
+  print_message("Current trusted users:");
+  for (int i = 0; i < TRUSTED_USERS_SIZE; ++i) {
+    if (trusted_users[i].uuid != 0)
+      print_message("%d. %s", i + 1, trusted_users[i].name);
   }
 }
 
@@ -197,9 +264,40 @@ static inline void get_local_ip(char *buffer, size_t buffer_size) {
   inet_ntop(AF_INET, &local_addr.sin_addr, buffer, buffer_size);
   close(socket_localip);
 }
+static inline void parse_file_message(Message *message, User *me) {
+  User *user = find_trusted_user_by_uuid(message->sender_uuid);
+  if (user == NULL &&
+      message->type ==
+          MESSAGE_FILE_START) // Two conditions are required, since we can
+                              // accidentally send two or more messages like
+                              // MESSAGE_FILE_DECLINE and print duplicate
+                              // messages to the user.
+  {
+    user = find_user(message->sender_uuid);
+    if (user == NULL) {
+      print_error("Something went wrong. Someone tried to send you a file. "
+                  "Can't find a file sender in active users.");
+      return;
+    }
+    print_message(
+        "%s tried to send you a file. Failed because he isn't a trusted "
+        "user.(Hint: use /trust <name> to add him to trusted users)",
+        user->name);
+    Message message_fail_receive = {0};
+    message_fail_receive.type = MESSAGE_FILE_DECLINE;
+    message_fail_receive.sender_uuid = me->uuid;
+    strncpy(message_fail_receive.sender_name, me->name, USER_NAME_SIZE);
+    message_fail_receive.time = time(NULL);
+    send_private_message(user, &message_fail_receive);
+    return;
+  }
+  if (user == NULL)
+    return;
+  get_file(message);
+}
 
 // Parses input message.
-static inline void parse_message(Message *message, User *user) {
+static inline void parse_message(Message *message, User *user, int is_private) {
   if (message->sender_uuid == user->uuid)
     return;
   if (message->type == MESSAGE_SYSTEM_JOIN) {
@@ -217,8 +315,20 @@ static inline void parse_message(Message *message, User *user) {
     remove_active_user(message);
     return;
   }
+  if (message->type == MESSAGE_FILE_START ||
+      message->type == MESSAGE_FILE_MID || message->type == MESSAGE_FILE_END) {
+    parse_file_message(message, user);
+    return;
+  }
+  if (message->type == MESSAGE_FILE_DECLINE) {
+    print_error("Failed to send a file. User doesn't trust you.");
+    set_should_send_file(0);
+    return;
+  }
   if (message->room != user->room)
     return;
+  if (is_private && message->type == MESSAGE_TEXT)
+    print_message("[PRIVATE MESSAGE]");
   print_message("%s: %s", message->sender_name,
                 message->text); // TODO: Make more beauty print message.
 }
@@ -252,7 +362,7 @@ static inline void *listen_other_users_udp(void *args) {
     Message message;
     if (get_message(&message, socket_udp) < 0)
       continue;
-    parse_message(&message, user);
+    parse_message(&message, user, 0);
   }
   close(socket_udp);
   return NULL;
@@ -298,9 +408,7 @@ static inline void *listen_other_users_tcp(void *args) {
     }
     Message message;
     get_message(&message, client_sock);
-    if (message.type == MESSAGE_TEXT || message.type == MESSAGE_FILE)
-      print_message("[PRIVATE MESSAGE]");
-    parse_message(&message, user);
+    parse_message(&message, user, 1);
     close(client_sock);
   }
   close(socket_tcp);
@@ -332,8 +440,10 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
   if (strncmp(buffer, "/pm ", 4) == 0) {
     char *name = strtok(buffer + 4, " ");
     char *text = strtok(NULL, "\n");
-    if (name == NULL || text == NULL)
+    if (name == NULL || text == NULL) {
       print_error("Use /pm <name> <text>");
+      return;
+    }
     User *receiver = find_user_by_name(name);
     if (receiver == NULL) {
       print_error("Failed to find a user %s", name);
@@ -343,15 +453,55 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
     send_private_message(receiver, message);
     return;
   }
+  if (strncmp(buffer, "/sendfile ", 10) == 0) {
+    char *name = strtok(buffer + 10, " ");
+    char *file = strtok(NULL, "\n");
+    if (name == NULL || file == NULL) {
+      print_error("Use /sendfile <name> <path-to-file>");
+      return;
+    }
+    User *receiver = find_user_by_name(name);
+    if (receiver == NULL) {
+      print_error("Failed to find a user %s", name);
+      return;
+    }
+    send_private_file(receiver, user, file);
+    return;
+  }
+  if (strncmp(buffer, "/trust ", 7) == 0) {
+    char *name = strtok(buffer + 7, "\n");
+    add_trusted_user(name);
+    return;
+  }
+  if (strncmp(buffer, "/untrust ", 9) == 0) {
+    char *name = strtok(buffer + 9, "\n");
+    remove_trusted_user(name);
+    return;
+  }
+  if (strcmp(buffer, "/trusted\n") == 0) {
+    show_trusted_users();
+    return;
+  }
   if (strncmp(buffer, "/help\n", buffer_size) == 0) {
-    print_message("/help -- for help message\n"
-                  "/pm <name> <text> -- for private message\n"
-                  "/members -- for list of current members");
+    print_help();
     return;
   }
   strncpy(message->text, buffer, buffer_size);
   message->time = time(NULL);
   send_message(message);
+}
+
+static inline void print_help() {
+  print_message(
+      "/help -- for help message\n"
+      "/pm <name> <text> -- for private message\n"
+      "/members -- for list of current members\n"
+      "/trust <user> -- Trust the user. He will be able to send you files.\n"
+      "/untrust <user> -- Stop trust user. He won't be able to send you "
+      "files.\n"
+      "/trusted -- List of your trusted users.\n"
+      "/sendfile <user> <path-to-file> -- Send a file to user. Need to be a "
+      "trusted user.\n");
 }
 
 // Listens user input in loop.
