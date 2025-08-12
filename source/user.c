@@ -1,13 +1,19 @@
 #include "user.h"
+#include "crypto.h"
 #include "log.h"
 #include "message.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <openssl/ssl.h>
+#include <openssl/types.h>
+#include <openssl/x509.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -49,6 +55,7 @@ static inline void parse_file_message(Message *message, User *me);
 static inline void *listen_other_users_tcp(void *args);
 static inline void *listen_other_users_udp(void *args);
 static inline void print_help();
+static inline void print_welcome_message(User *user);
 
 // Adds user to active_users.
 static inline void add_active_user(Message *message) {
@@ -173,6 +180,13 @@ static inline void show_trusted_users() {
 // Initializes the user.
 // In future will read data from user.json or create it.
 void init_user(User *user) { // TODO: full rework.
+  initialize_SSL();
+  if (verify_user_certificate() < 0) {
+    print_error("Something went wrong with sertificate");
+    abort();
+  } else {
+    print_message("Certificate ok");
+  }
   user->room = 0;
   char name[100] = "test-user\0";
   char digits[] = "0123456789";
@@ -183,17 +197,22 @@ void init_user(User *user) { // TODO: full rework.
   strcat(name, number);
   strncpy(user->name, name, USER_NAME_SIZE - 1);
   user->name[USER_NAME_SIZE - 1] = '\0';
-  user->uuid = rand();
-  user->port = PORT + rand() % 50000; // TODO: we need to to something with it.
+  user->uuid = get_user_uuid_from_cert();
+  user->port = PORT + rand() % 50000;
   char buffer[USER_LOCAL_IP_SIZE];
   get_local_ip(buffer, USER_LOCAL_IP_SIZE);
   strncpy(user->local_ip, buffer, USER_LOCAL_IP_SIZE);
+  print_welcome_message(user);
+}
+
+static inline void print_welcome_message(User *user) {
   print_message("Welcome to chat.\n"
                 "Your name: %s\n"
-                "Your room: %d\n"
-                "Your uuid: %d\n"
+                "Your room: %u\n"
+                "Your uuid: %u\n"
                 "Your local ip: %s\n"
-                "Your port: %d",
+                "Your port: %u\n"
+                "Use /help for commands\n",
                 user->name, user->room, user->uuid, user->local_ip, user->port);
 }
 
@@ -370,11 +389,45 @@ static inline void *listen_other_users_udp(void *args) {
 
 // Listens other users using TCP private messages.
 static inline void *listen_other_users_tcp(void *args) {
+  signal(SIGPIPE, SIG_IGN);
+  int should_abort = 0;
   User *user = (User *)args;
+  SSL_CTX *context = NULL;
+  SSL *ssl = NULL;
+  context = SSL_CTX_new(TLS_server_method());
+
+  if (context == NULL) {
+    print_error("SSL_CTX_new failed");
+    abort();
+  }
+
+  if (SSL_CTX_use_certificate_file(context, "crypto/user.crt",
+                                   SSL_FILETYPE_PEM) != 1) {
+    print_error("Failed to load user certificate");
+    should_abort = 1;
+    goto cleanup;
+  }
+  if (SSL_CTX_use_PrivateKey_file(context, "crypto/user.key",
+                                  SSL_FILETYPE_PEM) != 1) {
+    print_error("Failed to load user private key");
+    should_abort = 1;
+    goto cleanup;
+  }
+
+  if (SSL_CTX_load_verify_locations(context, "crypto/ca.crt", NULL) != 1) {
+    print_error("Failed to load CA certificate");
+    should_abort = 1;
+    goto cleanup;
+  }
+
+  SSL_CTX_set_verify(context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                     NULL);
+
   socket_tcp = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_tcp < 0) {
     print_error("Failed to create TCP socket");
-    abort();
+    should_abort = 1;
+    goto cleanup;
   }
   int opt = 1;
   setsockopt(socket_tcp, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -388,12 +441,13 @@ static inline void *listen_other_users_tcp(void *args) {
   if (bind(socket_tcp, (struct sockaddr *)&sockaddr, sizeof(sockaddr)) < 0) {
     print_error("Failed to bind TCP socket");
     close(socket_tcp);
-    abort();
+    should_abort = 1;
+    goto cleanup;
   }
   if (listen(socket_tcp, 10) < 0) {
     print_error("Failed to listen TCP socket");
-    close(socket_tcp);
-    abort();
+    should_abort = 1;
+    goto cleanup;
   }
   pthread_mutex_lock(&listen_ready_mutex);
   tcp_listen_ready = 1;
@@ -406,12 +460,36 @@ static inline void *listen_other_users_tcp(void *args) {
       print_error("Accept error in TCP socket");
       continue;
     }
+    ssl = SSL_new(context);
+    if (!ssl) {
+      print_error("SSL_new failed");
+      continue;
+    }
+    SSL_set_fd(ssl, client_sock);
+
+    if (SSL_accept(ssl) != 1) {
+      print_error("SSL_accept failed");
+      continue;
+    }
+
+    if (SSL_get_verify_result(ssl) != X509_V_OK) {
+      print_error("User certificate verification failed");
+      continue;
+    }
     Message message;
-    get_message(&message, client_sock);
+    get_ssl_message(&message, ssl);
     parse_message(&message, user, 1);
     close(client_sock);
   }
-  close(socket_tcp);
+cleanup:
+  if (ssl) {
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+  }
+  if (socket_tcp >= 0)
+    close(socket_tcp);
+  if (context)
+    SSL_CTX_free(context);
   return NULL;
 }
 

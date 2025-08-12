@@ -3,6 +3,8 @@
 
 #include "user.h"
 
+#include <openssl/types.h>
+
 #include <stdint.h>
 
 #define MESSAGE_TEXT_LENGTH 8192
@@ -27,10 +29,9 @@ enum MESSAGE_TYPE {
 typedef struct {
   uint32_t sender_uuid;
   char sender_name[USER_NAME_SIZE];
-  uint32_t room; // TODO: Rename it. It's not a room anymore. It's like context_value now.
-                 // MESSAGE_TEXT use it?
-                 // MESSAGE_SYSTEM_ uses it as user.port
-                 // MESSAGE_FILE_ uses it as buffer size.
+  uint32_t room; // TODO: Rename it. It's not a room anymore. It's like
+                 // context_value now. MESSAGE_TEXT use it? MESSAGE_SYSTEM_ uses
+                 // it as user.port MESSAGE_FILE_ uses it as buffer size.
   uint32_t type;
   uint32_t time;
   char text[MESSAGE_TEXT_LENGTH];
@@ -42,6 +43,7 @@ void send_private_file(User *receiver, User *me, char *path);
 
 void get_file(Message *message);
 int get_message(Message *message, int sockfd);
+int get_ssl_message(Message *message, SSL *ssl);
 
 void set_should_send_file(int value);
 

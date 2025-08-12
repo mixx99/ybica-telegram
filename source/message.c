@@ -9,6 +9,9 @@
 #include <string.h>
 #include <time.h>
 
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -115,16 +118,51 @@ int get_message(Message *message, int sockfd) {
     return -1;
   }
   deserialize_message(message, message_data);
-  return 0;
+  return status;
+}
+
+int get_ssl_message(Message *message, SSL *ssl) {
+  unsigned char buffer[sizeof(*message)];
+  int result = 0;
+  result = SSL_read(ssl, buffer, sizeof(buffer));
+  if (result < 0) {
+    print_error("Failed to SSL_read");
+    return -1;
+  }
+  deserialize_message(message, buffer);
+  return result;
 }
 
 // Sends private TCP message to receiver using his local ip and port.
 void send_private_message(User *receiver, Message *message) {
   int sockfd;
+  SSL_CTX *context = NULL;
+  SSL *ssl = NULL;
+
+  context = SSL_CTX_new(TLS_client_method());
+  if (!context) {
+    print_error("SSL_CTX_new failed");
+    goto cleanup;
+  }
+  if (SSL_CTX_use_certificate_file(context, "crypto/user.crt",
+                                   SSL_FILETYPE_PEM) != 1) {
+    print_error("Failed to load user certificate");
+    goto cleanup;
+  }
+  if (SSL_CTX_use_PrivateKey_file(context, "crypto/user.key",
+                                  SSL_FILETYPE_PEM) != 1) {
+    print_error("Failed to load user private key");
+    goto cleanup;
+  }
+  if (SSL_CTX_load_verify_locations(context, "crypto/ca.crt", NULL) != 1) {
+    print_error("Failed to load CA certificate");
+    goto cleanup;
+  }
+
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
     print_error("Failed to create a socket in private message");
-    abort();
+    goto cleanup;
   }
   struct sockaddr_in sockaddr;
   memset(&sockaddr, 0, sizeof(sockaddr));
@@ -134,13 +172,39 @@ void send_private_message(User *receiver, Message *message) {
 
   if (connect(sockfd, (struct sockaddr *)&sockaddr, sizeof(sockaddr)) < 0) {
     print_error("Failed to connect to receiver");
-    return;
+    goto cleanup;
+  }
+
+  ssl = SSL_new(context);
+  if (!ssl) {
+    print_error("SSL_new failed");
+    goto cleanup;
+  }
+  SSL_set_fd(ssl, sockfd);
+
+  if (SSL_connect(ssl) != 1) {
+    print_error("SSL_connect failed");
+    goto cleanup;
+  }
+
+  if (SSL_get_verify_result(ssl) != X509_V_OK) {
+    print_error("Certificate verification failed");
+    goto cleanup;
   }
 
   unsigned char message_data[sizeof(*message)], *ptr;
   ptr = serialize_message(message, message_data);
-  send(sockfd, message_data, ptr - message_data, 0);
-  close(sockfd);
+
+  SSL_write(ssl, message_data, ptr - message_data);
+cleanup:
+  if (ssl) {
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+  }
+  if (sockfd >= 0)
+    close(sockfd);
+  if (context)
+    SSL_CTX_free(context);
 }
 
 // Sends message to everyone using UDP broadcast.

@@ -4,3 +4,7 @@
 *.d
 build
 downloads/*
+crypto/*.crt
+crypto/*.srl
+crypto/*.key
+crypto/*.csr
