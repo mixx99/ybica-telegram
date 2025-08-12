@@ -7,11 +7,12 @@ ifeq ($(origin CC),default)
 endif
 
 CFLAGS ?= -O2
+LDFLAGS ?= -lssl -lcrypto
 OUT_O_DIR ?= build
 SRC = ./source
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
-CSRC = source/main.c source/message.c source/user.c source/log.c source/serialization.c
+CSRC = source/main.c source/message.c source/user.c source/log.c source/serialization.c source/crypto.c
 
 # reproducing source tree in object tree
 COBJ := $(addprefix $(OUT_O_DIR)/,$(CSRC:.c=.o))
