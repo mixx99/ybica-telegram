@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define USER_NAME_SIZE 50
+#define USER_NAME_SIZE 200
 #define USER_LOCAL_IP_SIZE 100
 
 typedef struct {

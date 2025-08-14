@@ -6,13 +6,13 @@ ifeq ($(origin CC),default)
   CC = gcc
 endif
 
-CFLAGS ?= -O2
+CFLAGS ?= -O2 -Ithirdparty
 LDFLAGS ?= -lssl -lcrypto
 OUT_O_DIR ?= build
 SRC = ./source
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
-CSRC = source/main.c source/message.c source/user.c source/log.c source/serialization.c source/crypto.c
+CSRC = source/main.c source/message.c source/user.c source/log.c source/serialization.c source/crypto.c source/crc.c thirdparty/cJSON/cJSON.c
 
 # reproducing source tree in object tree
 COBJ := $(addprefix $(OUT_O_DIR)/,$(CSRC:.c=.o))

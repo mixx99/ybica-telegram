@@ -22,6 +22,10 @@
 
 #define ACTIVE_USERS_SIZE 256
 #define TRUSTED_USERS_SIZE ACTIVE_USERS_SIZE
+#define CHECK_STUCKED_FILES_DELAY                                              \
+  20 // Be sure that this value is more than MAX_DELAY in log.c
+
+static User *global_user = NULL;
 
 static volatile int should_run = 1;
 static User active_users[ACTIVE_USERS_SIZE] = {0};
@@ -56,6 +60,9 @@ static inline void *listen_other_users_tcp(void *args);
 static inline void *listen_other_users_udp(void *args);
 static inline void print_help();
 static inline void print_welcome_message(User *user);
+static inline void *check_download_files(void *user_arg);
+static inline void destroy_user(User *user);
+static inline void sigint_handler(int dummy);
 
 // Adds user to active_users.
 static inline void add_active_user(Message *message) {
@@ -177,10 +184,17 @@ static inline void show_trusted_users() {
   }
 }
 
+static inline void sigint_handler(int dummy) {
+  destroy_user(global_user);
+  abort();
+}
+
 // Initializes the user.
 // In future will read data from user.json or create it.
 void init_user(User *user) { // TODO: full rework.
+  global_user = user;
   initialize_SSL();
+  signal(SIGINT, sigint_handler);
   if (verify_user_certificate() < 0) {
     print_error("Something went wrong with sertificate");
     abort();
@@ -344,6 +358,14 @@ static inline void parse_message(Message *message, User *user, int is_private) {
     set_should_send_file(0);
     return;
   }
+  if (message->type == MESSAGE_FILE_RESUME_REQUEST) {
+    User *request_user = find_user(message->sender_uuid);
+    print_message(
+        "%s request a resume downloading a file %s.\nTo resume uploading a "
+        "file please copy and paste the command \"/resume %s %u %s \"",
+        request_user->name, message->sender_name, request_user->name,
+        message->room, message->text);
+  }
   if (message->room != user->room)
     return;
   if (is_private && message->type == MESSAGE_TEXT)
@@ -493,15 +515,45 @@ cleanup:
   return NULL;
 }
 
+static inline void *check_download_files(void *user_arg) {
+  User *me = (User *)user_arg;
+  Message stucked_message = {0};
+  while (should_run) {
+    sleep(CHECK_STUCKED_FILES_DELAY);
+    memset(&stucked_message, 0, sizeof(stucked_message));
+    get_stucked_message(&stucked_message);
+    if (stucked_message.sender_uuid == 0)
+      continue;
+    User *receiver = find_user(stucked_message.sender_uuid);
+    if (receiver == NULL) // Maybe offline.
+      continue;
+    Message request_message;
+    request_message.sender_uuid = me->uuid;
+    request_message.room = stucked_message.room;
+    request_message.type = MESSAGE_FILE_RESUME_REQUEST;
+    strncpy(request_message.text, stucked_message.text, MESSAGE_TEXT_LENGTH);
+    strncpy(request_message.sender_name, stucked_message.sender_name,
+            USER_NAME_SIZE);
+    request_message.time = time(NULL);
+    send_private_message(receiver, &request_message);
+    print_message("Sended a request to resume download a file to %s.",
+                  receiver->name);
+  }
+  return NULL;
+}
+
 // Listens other users in loop.
 void listen_other_users(User *user) {
-  pthread_t worker_listen_udp, worker_listen_tcp;
+  pthread_t worker_listen_udp, worker_listen_tcp, worker_check_downloads;
   pthread_create(&worker_listen_udp, NULL,
                  (void *(*)(void *))listen_other_users_tcp, user);
   pthread_create(&worker_listen_tcp, NULL,
                  (void *(*)(void *))listen_other_users_udp, user);
+  pthread_create(&worker_check_downloads, NULL,
+                 (void *(*)(void *))check_download_files, user);
   pthread_join(worker_listen_tcp, NULL);
   pthread_join(worker_listen_udp, NULL);
+  pthread_join(worker_check_downloads, NULL);
 }
 
 // Parses user input from stdin.
@@ -531,6 +583,22 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
     send_private_message(receiver, message);
     return;
   }
+  if (strncmp(buffer, "/resume ", 8) == 0) {
+    char *name = strtok(buffer + 8, " ");
+    char *packet_number_str = strtok(NULL, " ");
+    char *path = strtok(NULL, "\n");
+
+    if (name == NULL || packet_number_str == NULL || path == NULL) {
+      print_error("Please copy the correct string or use /resume <name> "
+                  "<packet-number> <path-to-file>");
+      return;
+    }
+    uint32_t packet_number = atoi(packet_number_str);
+    User *receiver = find_user_by_name(name);
+    print_message("Resuming the uploading.");
+    send_private_file(receiver, user, path, packet_number + 1);
+    return;
+  }
   if (strncmp(buffer, "/sendfile ", 10) == 0) {
     char *name = strtok(buffer + 10, " ");
     char *file = strtok(NULL, "\n");
@@ -543,7 +611,7 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
       print_error("Failed to find a user %s", name);
       return;
     }
-    send_private_file(receiver, user, file);
+    send_private_file(receiver, user, file, 0);
     return;
   }
   if (strncmp(buffer, "/trust ", 7) == 0) {
@@ -580,6 +648,16 @@ static inline void print_help() {
       "/trusted -- List of your trusted users.\n"
       "/sendfile <user> <path-to-file> -- Send a file to user. Need to be a "
       "trusted user.\n");
+}
+
+void destroy_user(User *user) {
+  Message message = {0};
+  message.sender_uuid = user->uuid;
+  message.type = MESSAGE_SYSTEM_EXIT;
+  message.time = time(NULL);
+  strncpy(message.sender_name, user->name, USER_NAME_SIZE);
+  should_run = 0;
+  send_message(&message);
 }
 
 // Listens user input in loop.

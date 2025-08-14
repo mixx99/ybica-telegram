@@ -22,6 +22,7 @@ enum MESSAGE_TYPE {
   MESSAGE_FILE_START,
   MESSAGE_FILE_MID,
   MESSAGE_FILE_END,
+  MESSAGE_FILE_RESUME_REQUEST,
   // Decline file transfer if sender isn't trusted.
   MESSAGE_FILE_DECLINE
 };
@@ -39,7 +40,7 @@ typedef struct {
 
 void send_message(Message *message);
 void send_private_message(User *receiver, Message *message);
-void send_private_file(User *receiver, User *me, char *path);
+void send_private_file(User *receiver, User *me, char *path, int packet_number);
 
 void get_file(Message *message);
 int get_message(Message *message, int sockfd);

@@ -8,3 +8,5 @@ crypto/*.crt
 crypto/*.srl
 crypto/*.key
 crypto/*.csr
+.cache
+compile_commands.json
