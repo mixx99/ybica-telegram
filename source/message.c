@@ -1,4 +1,5 @@
 #include "message.h"
+#include "crc.h"
 #include "log.h"
 #include "serialization.h"
 #include "user.h"
@@ -40,21 +41,32 @@ void set_should_send_file(int value) {
 void get_file(Message *message) {
   pthread_mutex_lock(&get_file_mutex);
   FILE *file = NULL;
-  char path[100] = "./downloads/";
+  char path[250] = "./downloads/";
   strncat(path, message->sender_name, USER_NAME_SIZE);
   if (message->type == MESSAGE_FILE_START) {
     print_message("Start to download the file %s", message->sender_name);
     file = fopen(path, "wb");
+    fclose(file); // Just clear or create the file.
+    add_json_file(message);
+    pthread_mutex_unlock(&get_file_mutex);
+    return;
   }
-  if (message->type == MESSAGE_FILE_MID)
+  if (message->type == MESSAGE_FILE_MID) {
     file = fopen(path, "ab");
-  if (message->type == MESSAGE_FILE_END)
-    print_message("File was successfully downloaded. The sender is: %s",
-                  message->sender_name);
+    update_json_file(message);
+  }
+  if (message->type == MESSAGE_FILE_END) {
+    remove_json_file(message);
+    if (message->room == get_crc(path))
+      print_message("File was successfully downloaded.");
+    else
+      print_error("Failed to download a file");
+  }
+
   if (file == NULL && message->type != MESSAGE_FILE_END) {
-    print_error(
-        "get_file: Failed to get a file: %s. Check the downloads folder",
-        message->sender_name);
+    print_error("get_file: Failed to get a file: %s. Check the "
+                "downloads folder",
+                message->sender_name);
     pthread_mutex_unlock(&get_file_mutex);
     return;
   }
@@ -67,7 +79,8 @@ void get_file(Message *message) {
 }
 
 // Sends a file via send_private_message function.
-void send_private_file(User *receiver, User *me, char *path) {
+void send_private_file(User *receiver, User *me, char *path,
+                       int start_packet_number) {
   set_should_send_file(1);
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
@@ -82,31 +95,38 @@ void send_private_file(User *receiver, User *me, char *path) {
     filename++;
   strncpy(message.sender_name, filename, USER_NAME_SIZE);
 
+  if (start_packet_number == 0) {
+    Message start_message = {0};
+    strncpy(start_message.sender_name, filename, USER_NAME_SIZE);
+    strncpy(start_message.text, path, MESSAGE_TEXT_LENGTH);
+    start_message.sender_uuid = me->uuid;
+    start_message.type = MESSAGE_FILE_START;
+    send_private_message(receiver, &start_message);
+  }
+
   print_message("Sending a file %s", filename);
   while (get_should_send_file()) {
     uint32_t readed = fread(message.text, 1, MESSAGE_TEXT_LENGTH, file);
     if (readed == 0)
       break;
+    if (packet_number < start_packet_number) {
+      packet_number++;
+      continue;
+    }
     message.room = readed;
     message.time = time(NULL);
     message.sender_uuid = me->uuid;
-    if (packet_number == 1)
-      message.type = MESSAGE_FILE_START;
-    if (packet_number > 1)
-      message.type = MESSAGE_FILE_MID;
+    message.type = MESSAGE_FILE_MID;
     send_private_message(receiver, &message);
     packet_number++;
   }
-  memset(&message, 0, sizeof(message));
-  message.sender_uuid = me->uuid;
-  strncpy(message.sender_name, me->name, USER_NAME_SIZE);
   message.time = time(NULL);
   message.type = MESSAGE_FILE_END;
+  message.room = get_crc(path);
   send_private_message(receiver, &message);
   if (get_should_send_file())
     print_message("File was sent successfully");
   fclose(file);
-  set_should_send_file(1);
 }
 
 // Gets and deserializes message.
