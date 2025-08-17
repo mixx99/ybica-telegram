@@ -42,7 +42,7 @@ static inline unsigned char *serialize_str(unsigned char *buffer, char *str,
 unsigned char *serialize_message(Message *message, unsigned char *buffer) {
   buffer = serialize_int(buffer, message->sender_uuid);
   buffer = serialize_str(buffer, message->sender_name, USER_NAME_SIZE);
-  buffer = serialize_int(buffer, message->room);
+  buffer = serialize_int(buffer, message->context_value);
   buffer = serialize_int(buffer, message->type);
   buffer = serialize_int(buffer, message->time);
   buffer = serialize_str(buffer, message->text, MESSAGE_TEXT_LENGTH);
@@ -53,7 +53,7 @@ unsigned char *serialize_message(Message *message, unsigned char *buffer) {
 void deserialize_message(Message *message, unsigned char *buffer) {
   buffer = deserialize_int(buffer, &message->sender_uuid);
   buffer = deserialize_str(buffer, message->sender_name, USER_NAME_SIZE);
-  buffer = deserialize_int(buffer, &message->room);
+  buffer = deserialize_int(buffer, &message->context_value);
   buffer = deserialize_int(buffer, &message->type);
   buffer = deserialize_int(buffer, &message->time);
   buffer = deserialize_str(buffer, message->text, MESSAGE_TEXT_LENGTH);

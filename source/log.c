@@ -147,7 +147,7 @@ void get_stucked_message(
               USER_NAME_SIZE); // filename
       strncpy(message->text, path_to_file->valuestring, MESSAGE_TEXT_LENGTH);
       message->sender_uuid = uuid->valuedouble;
-      message->room = last_packet_number->valueint;
+      message->context_value = last_packet_number->valueint;
       cJSON_SetNumberValue(last_update,
                            time(NULL)); // Update time.
       save_json_file(JSON_FILES_PATH, json);
