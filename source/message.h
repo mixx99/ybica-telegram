@@ -11,10 +11,10 @@
 #define PORT 5555
 
 enum MESSAGE_TYPE {
-  MESSAGE_TEXT, // Regular message with text.
+  MESSAGE_TEXT, // Regular message with text inside.
 
   // System messages with info about user inside.
-  // message.room = user. port, message.text = user.local_ip
+  // message.context_value = user. port, message.text = user.local_ip
   MESSAGE_SYSTEM_JOIN,
   MESSAGE_SYSTEM_EXIT,
   MESSAGE_SYSTEM_ABOUT_ME,
@@ -23,16 +23,19 @@ enum MESSAGE_TYPE {
   MESSAGE_FILE_MID,
   MESSAGE_FILE_END,
   MESSAGE_FILE_RESUME_REQUEST,
-  // Decline file transfer if sender isn't trusted.
   MESSAGE_FILE_DECLINE
 };
 
 typedef struct {
   uint32_t sender_uuid;
   char sender_name[USER_NAME_SIZE];
-  uint32_t room; // TODO: Rename it. It's not a room anymore. It's like
-                 // context_value now. MESSAGE_TEXT use it? MESSAGE_SYSTEM_ uses
-                 // it as user.port MESSAGE_FILE_ uses it as buffer size.
+  uint32_t context_value;
+  /*
+   * MESSAGE_SYSTEM_* use context_value as user.port
+   * MESSAGE_FILE_MID use context_value as buffer size.
+   * MESSAGE_FILE_END use context_value as CRC value.
+   * MESSAGE_FILE_RESUME_REQUEST use context_value as packet number to resume.
+   */
   uint32_t type;
   uint32_t time;
   char text[MESSAGE_TEXT_LENGTH];

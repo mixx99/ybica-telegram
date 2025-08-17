@@ -57,7 +57,7 @@ void get_file(Message *message) {
   }
   if (message->type == MESSAGE_FILE_END) {
     remove_json_file(message);
-    if (message->room == get_crc(path))
+    if (message->context_value == get_crc(path))
       print_message("File was successfully downloaded.");
     else
       print_error("Failed to download a file");
@@ -71,7 +71,7 @@ void get_file(Message *message) {
     return;
   }
   if (file != NULL && message->type != MESSAGE_FILE_END)
-    fwrite(message->text, 1, message->room, file);
+    fwrite(message->text, 1, message->context_value, file);
 
   if (file != NULL)
     fclose(file);
@@ -113,7 +113,7 @@ void send_private_file(User *receiver, User *me, char *path,
       packet_number++;
       continue;
     }
-    message.room = readed;
+    message.context_value = readed;
     message.time = time(NULL);
     message.sender_uuid = me->uuid;
     message.type = MESSAGE_FILE_MID;
@@ -122,7 +122,7 @@ void send_private_file(User *receiver, User *me, char *path,
   }
   message.time = time(NULL);
   message.type = MESSAGE_FILE_END;
-  message.room = get_crc(path);
+  message.context_value = get_crc(path);
   send_private_message(receiver, &message);
   if (get_should_send_file())
     print_message("File was sent successfully");

@@ -73,7 +73,7 @@ static inline void add_active_user(Message *message) {
   strncpy(user.local_ip, message->text, USER_LOCAL_IP_SIZE - 1);
   user.local_ip[USER_LOCAL_IP_SIZE - 1] = '\0';
   user.uuid = message->sender_uuid;
-  user.port = message->room;
+  user.port = message->context_value;
 
   for (int i = 0; i < ACTIVE_USERS_SIZE; ++i) {
     if (active_users[i].uuid == user.uuid)
@@ -89,6 +89,7 @@ static inline void add_active_user(Message *message) {
   print_error("Failed to add a user %s.", message->sender_name);
 }
 
+// Adds user to trusted users.
 static inline void add_trusted_user(char *name) {
   User *user = find_user_by_name(name);
   if (user == NULL) {
@@ -121,6 +122,7 @@ static inline void remove_active_user(Message *message) {
   print_error("Failed to remove user %s.", message->sender_name);
 }
 
+// Removes user from trusted users.
 static inline void remove_trusted_user(char *name) {
   User *user = find_user_by_name(name);
   if (user == NULL) {
@@ -147,12 +149,14 @@ static inline User *find_user(uint32_t uuid) {
 // Finds and returns user by name in active_users.
 static inline User *find_user_by_name(char *name) {
   for (int i = 0; i < ACTIVE_USERS_SIZE; ++i) {
-    if (active_users[i].uuid != 0 && strcmp(active_users[i].name, name) == 0)
+    if (active_users[i].uuid != 0 &&
+        strncmp(active_users[i].name, name, USER_NAME_SIZE) == 0)
       return &active_users[i];
   }
   return NULL;
 }
 
+// Return's pointer to user if he's trusted.
 static inline User *find_trusted_user_by_uuid(uint32_t uuid) {
   for (int i = 0; i < TRUSTED_USERS_SIZE; ++i)
     if (trusted_users[i].uuid == uuid)
@@ -160,6 +164,7 @@ static inline User *find_trusted_user_by_uuid(uint32_t uuid) {
   return NULL;
 }
 
+// Return's pointer to user if he's trusted.
 static inline User *find_trusted_user(char *name) {
   for (int i = 0; i < TRUSTED_USERS_SIZE; ++i)
     if (strncmp(trusted_users[i].name, name, USER_NAME_SIZE) == 0)
@@ -176,6 +181,7 @@ static inline void show_active_users() {
   }
 }
 
+// Shows all trusted users.
 static inline void show_trusted_users() {
   print_message("Current trusted users:");
   for (int i = 0; i < TRUSTED_USERS_SIZE; ++i) {
@@ -184,8 +190,10 @@ static inline void show_trusted_users() {
   }
 }
 
+// Catch the SIGINT signal.
 static inline void sigint_handler(int dummy) {
   destroy_user(global_user);
+  destroy_SSL();
   abort();
 }
 
@@ -230,14 +238,16 @@ static inline void print_welcome_message(User *user) {
                 user->name, user->room, user->uuid, user->local_ip, user->port);
 }
 
-// Sends message which type is MESSAGE_SYSTEM_JOIN with info about user after
-// his first initialization. Message.text = user.local_ip, Message.room =
-// user.port. Should be used once.
+/*
+ * Sends message which type is MESSAGE_SYSTEM_JOIN with info about user after
+ * his first initialization. Message.text = user.local_ip,
+ * Message.context_value = user.port. Should be used once.
+ */
 static inline void send_info_join_to_everyone(User *user) {
-  Message message;
+  Message message = {0};
   strncpy(message.sender_name, user->name, USER_NAME_SIZE - 1);
   message.sender_name[USER_NAME_SIZE - 1] = '\0';
-  message.room = user->port;
+  message.context_value = user->port;
   message.sender_uuid = user->uuid;
   strncpy(message.text, user->local_ip, USER_LOCAL_IP_SIZE - 1);
   message.text[USER_LOCAL_IP_SIZE - 1] = '\0';
@@ -246,26 +256,28 @@ static inline void send_info_join_to_everyone(User *user) {
   send_message(&message);
 }
 
-// Sends info about user to receiver using private_message. Message.text =
-// user.local_ip, Message.room = user.port.
+/*
+ * Sends info about user to receiver using private_message.
+ * Message.text = user.local_ip, Message.context_value = user.port.
+ */
 static inline void send_info_about_me_to_user(uint32_t uuid, User *me) {
   User *receiver = find_user(uuid);
   if (receiver == NULL) {
     print_error("Failed to find user to send him message");
     return;
   }
-  Message message;
+  Message message = {0};
   message.sender_uuid = me->uuid;
   strncpy(message.sender_name, me->name, USER_NAME_SIZE);
   strncpy(message.text, me->local_ip, USER_LOCAL_IP_SIZE);
   message.type = MESSAGE_SYSTEM_ABOUT_ME;
   message.time = time(NULL);
-  message.room = me->port;
+  message.context_value = me->port;
 
   send_private_message(receiver, &message);
 }
 
-// Gets local user ip.
+// Gets local user ip to buffer.
 static inline void get_local_ip(char *buffer, size_t buffer_size) {
   socket_localip = socket(AF_INET, SOCK_DGRAM, 0);
   if (socket_localip < 0) {
@@ -297,6 +309,7 @@ static inline void get_local_ip(char *buffer, size_t buffer_size) {
   inet_ntop(AF_INET, &local_addr.sin_addr, buffer, buffer_size);
   close(socket_localip);
 }
+
 static inline void parse_file_message(Message *message, User *me) {
   User *user = find_trusted_user_by_uuid(message->sender_uuid);
   if (user == NULL &&
@@ -329,7 +342,7 @@ static inline void parse_file_message(Message *message, User *me) {
   get_file(message);
 }
 
-// Parses input message.
+// Parses message.
 static inline void parse_message(Message *message, User *user, int is_private) {
   if (message->sender_uuid == user->uuid)
     return;
@@ -364,9 +377,9 @@ static inline void parse_message(Message *message, User *user, int is_private) {
         "%s request a resume downloading a file %s.\nTo resume uploading a "
         "file please copy and paste the command \"/resume %s %u %s \"",
         request_user->name, message->sender_name, request_user->name,
-        message->room, message->text);
+        message->context_value, message->text);
   }
-  if (message->room != user->room)
+  if (message->context_value != user->room)
     return;
   if (is_private && message->type == MESSAGE_TEXT)
     print_message("[PRIVATE MESSAGE]");
@@ -515,6 +528,8 @@ cleanup:
   return NULL;
 }
 
+// Checks every CHECK_STUCKED_FILES_DELAY seconds the data/files.json for
+// stucked message.
 static inline void *check_download_files(void *user_arg) {
   User *me = (User *)user_arg;
   Message stucked_message = {0};
@@ -529,7 +544,7 @@ static inline void *check_download_files(void *user_arg) {
       continue;
     Message request_message;
     request_message.sender_uuid = me->uuid;
-    request_message.room = stucked_message.room;
+    request_message.context_value = stucked_message.context_value;
     request_message.type = MESSAGE_FILE_RESUME_REQUEST;
     strncpy(request_message.text, stucked_message.text, MESSAGE_TEXT_LENGTH);
     strncpy(request_message.sender_name, stucked_message.sender_name,
@@ -561,9 +576,9 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
                                     size_t buffer_size) {
   ssize_t readed = getline(&buffer, &buffer_size, stdin);
   buffer[readed] = '\0';
-  if (strcmp(buffer, "\n") == 0)
+  if (strncmp(buffer, "\n", buffer_size) == 0)
     return;
-  if (strcmp(buffer, "/members\n") == 0) {
+  if (strncmp(buffer, "/members\n", buffer_size) == 0) {
     show_active_users();
     return;
   }
@@ -624,7 +639,7 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
     remove_trusted_user(name);
     return;
   }
-  if (strcmp(buffer, "/trusted\n") == 0) {
+  if (strncmp(buffer, "/trusted\n", buffer_size) == 0) {
     show_trusted_users();
     return;
   }
@@ -637,6 +652,7 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
   send_message(message);
 }
 
+// Prints help message.
 static inline void print_help() {
   print_message(
       "/help -- for help message\n"
@@ -650,6 +666,7 @@ static inline void print_help() {
       "trusted user.\n");
 }
 
+// Sends to everyone message with type MESSAGE_SYSTEM_EXIT.
 void destroy_user(User *user) {
   Message message = {0};
   message.sender_uuid = user->uuid;
@@ -665,8 +682,7 @@ void listen_user(User *user) {
   char *buffer = NULL;
   size_t buffer_size = MESSAGE_TEXT_LENGTH;
   buffer = (char *)malloc(buffer_size);
-  Message message;
-  message.room = 0; // The idea is - 0 room is general room.
+  Message message = {0};
   message.type = MESSAGE_TEXT;
   message.sender_uuid = user->uuid;
   strncpy(message.sender_name, user->name, USER_NAME_SIZE);
