@@ -4,6 +4,7 @@
 *.d
 build
 downloads/*
+data/*.txt
 crypto/*.crt
 crypto/*.srl
 crypto/*.key

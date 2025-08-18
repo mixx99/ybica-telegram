@@ -216,6 +216,8 @@ void send_private_message(User *receiver, Message *message) {
   ptr = serialize_message(message, message_data);
 
   SSL_write(ssl, message_data, ptr - message_data);
+  if (message->type == MESSAGE_TEXT)
+    log_message(message, receiver->uuid, 1);
 cleanup:
   if (ssl) {
     SSL_shutdown(ssl);
@@ -256,4 +258,6 @@ void send_message(Message *message) {
     return;
   }
   close(sockfd);
+  if (message->type == MESSAGE_TEXT)
+    log_message(message, message->sender_uuid, 0);
 }
