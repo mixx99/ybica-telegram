@@ -398,7 +398,7 @@ static inline void parse_message(Message *message, User *user, int is_private) {
   struct tm *t = localtime(&now);
   if (get_global_chat_status() ||
       is_private) /* If we listen global chat or it's a private message */
-    print_message("[%02d:%02d:%02d] %s: %s\n", t->tm_hour, t->tm_min, t->tm_sec,
+    print_message("[%02d:%02d:%02d] %s: %s", t->tm_hour, t->tm_min, t->tm_sec,
                   message->sender_name, message->text);
   if (is_private)
     log_message(message, message->sender_uuid, 1);
