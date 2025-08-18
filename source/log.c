@@ -13,6 +13,8 @@
 #include <cJSON/cJSON.h>
 
 #define JSON_FILES_PATH "data/files.json"
+#define JSON_USER_PATH "data/user.json"
+#define USER_FILENAMES_SIZE 100
 #define MAX_DELAY 5
 
 pthread_mutex_t mutex_print = PTHREAD_MUTEX_INITIALIZER;
@@ -20,6 +22,7 @@ pthread_mutex_t mutex_files_json = PTHREAD_MUTEX_INITIALIZER;
 
 static inline cJSON *load_json_file(const char *path);
 static inline int save_json_file(const char *path, cJSON *json);
+static inline void request_username(char *username);
 
 static inline cJSON *load_json_file(const char *path) {
   pthread_mutex_lock(&mutex_files_json);
@@ -56,6 +59,43 @@ static inline cJSON *load_json_file(const char *path) {
   return json;
 }
 
+void print_history(uint32_t uuid) {
+  char filename[USER_FILENAMES_SIZE];
+  char path[USER_FILENAMES_SIZE] = "data/\0";
+  sprintf(filename, "%u.txt", uuid);
+  strcat(path, filename);
+  FILE *file = fopen(path, "r");
+  if (!file) {
+    print_error("No history found for user");
+    return;
+  }
+  char line[1024];
+  while (fgets(line, sizeof(line), file))
+    print_message("%s\n", line);
+  fclose(file);
+}
+
+void log_message(Message *message, uint32_t user_uuid, int is_private_message) {
+  char filename[USER_FILENAMES_SIZE];
+  char path[USER_FILENAMES_SIZE] = "data/\0";
+  if (is_private_message)
+    snprintf(filename, sizeof(filename), "%u", user_uuid);
+  else
+    strncpy(filename, "general", USER_FILENAMES_SIZE);
+  strcat(filename, ".txt");
+  strcat(path, filename);
+  FILE *file = fopen(path, "a");
+  if (file == NULL) {
+    print_error("Failed to open a file to log message");
+    return;
+  }
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  fprintf(file, "[%02d:%02d:%02d] %s: %s\n", t->tm_hour, t->tm_min, t->tm_sec,
+          message->sender_name, message->text);
+  fclose(file);
+}
+
 static inline int save_json_file(const char *path, cJSON *json) {
   char *out = cJSON_Print(json);
   if (out == NULL)
@@ -89,6 +129,34 @@ void add_json_file(Message *message) {
   cJSON_AddItemToObject(json, message->sender_name, file_obj);
 
   save_json_file(JSON_FILES_PATH, json);
+  cJSON_Delete(json);
+}
+
+// Requests the username from stdin.
+static inline void request_username(char *username) {
+  print_message("Please enter your name:");
+  scanf("%s", username);
+  cJSON *json = cJSON_CreateObject();
+  cJSON_AddStringToObject(json, "name", username);
+  save_json_file(JSON_USER_PATH, json);
+  cJSON_Delete(json);
+}
+
+// Copy name from user.json to username.
+void get_username(char *username) {
+  cJSON *json = load_json_file(JSON_USER_PATH);
+  if (!json) {
+    request_username(username);
+    return;
+  }
+  cJSON *name_obj = cJSON_GetObjectItem(json, "name");
+  if (!name_obj || !cJSON_IsString(name_obj)) {
+    cJSON_Delete(json);
+    request_username(username);
+    return;
+  }
+  strncpy(username, name_obj->valuestring, USER_NAME_SIZE - 1);
+  username[USER_NAME_SIZE - 1] = '\0';
   cJSON_Delete(json);
 }
 

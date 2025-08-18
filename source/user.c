@@ -26,6 +26,7 @@
   20 // Be sure that this value is more than MAX_DELAY in log.c
 
 static User *global_user = NULL;
+static int is_global_chat_on = 1;
 
 static volatile int should_run = 1;
 static User active_users[ACTIVE_USERS_SIZE] = {0};
@@ -34,6 +35,7 @@ static User trusted_users[TRUSTED_USERS_SIZE] = {0};
 static int tcp_listen_ready = 0;
 static int udp_listen_ready = 0;
 static pthread_mutex_t listen_ready_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t global_chat_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int socket_tcp = 0;
 static int socket_udp = 0;
@@ -63,7 +65,22 @@ static inline void print_welcome_message(User *user);
 static inline void *check_download_files(void *user_arg);
 static inline void destroy_user(User *user);
 static inline void sigint_handler(int dummy);
+static inline void set_global_chat_status(int value);
+static inline int get_global_chat_status();
 
+static inline void set_global_chat_status(int value) {
+  pthread_mutex_lock(&global_chat_mutex);
+  is_global_chat_on = value;
+  pthread_mutex_unlock(&global_chat_mutex);
+}
+
+static inline int get_global_chat_status() {
+  int result;
+  pthread_mutex_lock(&global_chat_mutex);
+  result = is_global_chat_on;
+  pthread_mutex_unlock(&global_chat_mutex);
+  return result;
+}
 // Adds user to active_users.
 static inline void add_active_user(Message *message) {
   User user;
@@ -198,8 +215,7 @@ static inline void sigint_handler(int dummy) {
 }
 
 // Initializes the user.
-// In future will read data from user.json or create it.
-void init_user(User *user) { // TODO: full rework.
+void init_user(User *user) {
   global_user = user;
   initialize_SSL();
   signal(SIGINT, sigint_handler);
@@ -210,15 +226,7 @@ void init_user(User *user) { // TODO: full rework.
     print_message("Certificate ok");
   }
   user->room = 0;
-  char name[100] = "test-user\0";
-  char digits[] = "0123456789";
-  char number[3];
-  number[0] = digits[rand() % 10];
-  number[1] = digits[rand() % 10];
-  number[2] = '\0';
-  strcat(name, number);
-  strncpy(user->name, name, USER_NAME_SIZE - 1);
-  user->name[USER_NAME_SIZE - 1] = '\0';
+  get_username(user->name);
   user->uuid = get_user_uuid_from_cert();
   user->port = PORT + rand() % 50000;
   char buffer[USER_LOCAL_IP_SIZE];
@@ -381,10 +389,21 @@ static inline void parse_message(Message *message, User *user, int is_private) {
   }
   if (message->context_value != user->room)
     return;
-  if (is_private && message->type == MESSAGE_TEXT)
+  if (message->type != MESSAGE_TEXT)
+    return;
+  if (is_private)
     print_message("[PRIVATE MESSAGE]");
-  print_message("%s: %s", message->sender_name,
-                message->text); // TODO: Make more beauty print message.
+
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  if (get_global_chat_status() ||
+      is_private) /* If we listen global chat or it's a private message */
+    print_message("[%02d:%02d:%02d] %s: %s\n", t->tm_hour, t->tm_min, t->tm_sec,
+                  message->sender_name, message->text);
+  if (is_private)
+    log_message(message, message->sender_uuid, 1);
+  else
+    log_message(message, message->sender_uuid, 0);
 }
 
 // Listens other users using UDP broadcast.
@@ -614,6 +633,67 @@ static inline void parse_user_input(User *user, Message *message, char *buffer,
     send_private_file(receiver, user, path, packet_number + 1);
     return;
   }
+  if (strncmp(buffer, "/general", 8) == 0) {
+    if (get_global_chat_status() != 0) {
+      print_message("General chat disabled");
+      set_global_chat_status(0);
+    } else {
+      print_message("General chat enabled");
+      set_global_chat_status(1);
+    }
+    return;
+  }
+  if (strncmp(buffer, "/history ", 9) == 0) {
+    char *name = strtok(buffer + 9, "\n");
+    if (name == NULL) {
+      print_error("Use /history <username>");
+      return;
+    }
+    User *other_user = find_user_by_name(name);
+    if (other_user == NULL) {
+      print_error("Failed to find a user %s", name);
+      return;
+    }
+    print_message("History with user %s", name);
+    print_history(other_user->uuid);
+    return;
+  }
+  if (strncmp(buffer, "/sendg ", 7) == 0) {
+    char *token = strtok(buffer + 7, " ");
+    if (token == NULL) {
+      print_error("Use /sendg <number-of-users> <users> <message>");
+      return;
+    }
+    int number = atoi(token);
+    if (number <= 0) {
+      print_error("Invalid number of users");
+      return;
+    }
+    User *receivers[number];
+    for (int i = 0; i < number; i++) {
+      token = strtok(NULL, " ");
+      if (token == NULL) {
+        print_error("Not enough usernames provided");
+        return;
+      }
+      User *u = find_user_by_name(token);
+      if (u == NULL) {
+        print_error("Failed to find a user %s", token);
+        return;
+      }
+      receivers[i] = u;
+    }
+    char *text = strtok(NULL, "\n");
+    if (text == NULL) {
+      print_error("Message text missing");
+      return;
+    }
+    strncpy(message->text, text, MESSAGE_TEXT_LENGTH);
+    for (int i = 0; i < number; i++) {
+      send_private_message(receivers[i], message);
+    }
+    return;
+  }
   if (strncmp(buffer, "/sendfile ", 10) == 0) {
     char *name = strtok(buffer + 10, " ");
     char *file = strtok(NULL, "\n");
@@ -663,7 +743,11 @@ static inline void print_help() {
       "files.\n"
       "/trusted -- List of your trusted users.\n"
       "/sendfile <user> <path-to-file> -- Send a file to user. Need to be a "
-      "trusted user.\n");
+      "trusted user.\n"
+      "/general -- Enable/Disable general chat.\n"
+      "/history <username> -- Prints the history with user.\n"
+      "/sendg <Number-of-users> <Users> <Text> -- Sends a message to group of "
+      "users.\n");
 }
 
 // Sends to everyone message with type MESSAGE_SYSTEM_EXIT.
