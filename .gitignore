@@ -9,5 +9,7 @@ crypto/*.crt
 crypto/*.srl
 crypto/*.key
 crypto/*.csr
+*.info
 .cache
 compile_commands.json
+coverage-report
