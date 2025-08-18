@@ -71,7 +71,7 @@ void print_history(uint32_t uuid) {
   }
   char line[1024];
   while (fgets(line, sizeof(line), file))
-    print_message("%s\n", line);
+    print_message("%s", line);
   fclose(file);
 }
 
