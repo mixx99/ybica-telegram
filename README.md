@@ -14,7 +14,7 @@ This is an implementation of a simple messenger on a local network
 - It is possible to send messages to a group of users
 - Connecting/disconnecting to a general chat
 
-<img width="397" height="346" alt="image" src="https://github.com/user-attachments/assets/f00ceda9-136b-4a5d-b056-a35007c02ed4" />
+<img width="484" height="357" alt="image" src="https://github.com/user-attachments/assets/4ed9dd7a-d0e6-44f8-a3fe-3bc2eec0f7c8" />
 
 ### User functions:
 
